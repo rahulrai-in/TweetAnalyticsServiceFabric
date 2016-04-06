@@ -1,0 +1,23 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="14.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Service Fabric Tools\Microsoft.VisualStudio.Azure.Fabric.ApplicationProject.props" />
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>4a452817-fdf4-49b7-b34c-1c8dd65dbc06</ProjectGuid>
+    <ProjectVersion>0.12</ProjectVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="PublishProfiles\Local.xml" />
+    <None Include="Scripts\Deploy-FabricApplication.ps1" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\TweetAnalytics.TweetService\TweetAnalytics.TweetService.csproj" />
+    <ProjectReference Include="..\TweetAnalytics.Web\TweetAnalytics.Web.xproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="ApplicationPackageRoot\ApplicationManifest.xml" />
+    <Content Include="ApplicationParameters\Cloud.xml" />
+    <Content Include="ApplicationParameters\Local.xml" />
+    <Content Include="PublishProfiles\Cloud.xml" />
+  </ItemGroup>
+  <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Service Fabric Tools\Microsoft.VisualStudio.Azure.Fabric.ApplicationProject.targets" />
+</Project>

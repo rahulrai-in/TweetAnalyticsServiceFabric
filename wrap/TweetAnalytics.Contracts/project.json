@@ -1,0 +1,17 @@
+{
+  "version": "1.0.0-*",
+  "frameworks": {
+    "net451": {
+      "wrappedProject": "../../TweetAnalytics.Contracts/TweetAnalytics.Contracts.csproj",
+      "bin": {
+        "assembly": "../../TweetAnalytics.Contracts/obj/{configuration}/TweetAnalytics.Contracts.dll",
+        "pdb": "../../TweetAnalytics.Contracts/obj/{configuration}/TweetAnalytics.Contracts.pdb"
+      },
+      "dependencies": {
+        "Microsoft.ServiceFabric": "4.5.175-preview",
+        "Microsoft.ServiceFabric.Data": "1.5.175-preview",
+        "Microsoft.ServiceFabric.Services": "1.5.175-preview"
+      }
+    }
+  }
+}
