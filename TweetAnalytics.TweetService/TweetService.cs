@@ -1,10 +1,10 @@
 ﻿namespace TweetAnalytics.TweetService
 {
-    #region
-
     using System;
     using System.Collections.Generic;
+    using System.Fabric;
     using System.Linq;
+    using System.Net;
     using System.Net.Http;
     using System.Net.Http.Headers;
     using System.Text;
@@ -15,20 +15,29 @@
 
     using Microsoft.ServiceFabric.Data.Collections;
     using Microsoft.ServiceFabric.Services.Communication.Runtime;
-    using Microsoft.ServiceFabric.Services.Remoting.Runtime;
     using Microsoft.ServiceFabric.Services.Runtime;
 
     using Newtonsoft.Json;
 
     using TweetAnalytics.Contracts;
 
-    #endregion
-
     public class TweetService : StatefulService, ITweet
     {
         #region Fields
 
+        private readonly StatefulServiceContext context;
+
         private CancellationToken cancellationToken;
+
+        #endregion
+
+        #region Constructors and Destructors
+
+        public TweetService(StatefulServiceContext context)
+            : base(context)
+        {
+            this.context = context;
+        }
 
         #endregion
 
@@ -42,13 +51,22 @@
             }
 
             var tweetScore = new TweetScore();
+            var scoreList = new List<KeyValuePair<string, decimal>>();
             var scoreDictionary =
                 await this.StateManager.GetOrAddAsync<IReliableDictionary<string, decimal>>("scoreDictionary");
             using (var tx = this.StateManager.CreateTransaction())
             {
                 tweetScore.TweetCount = await scoreDictionary.GetCountAsync(tx);
-                tweetScore.TweetSentimentAverageScore = tweetScore.TweetCount == 0 ? 0 :
-                    scoreDictionary.CreateEnumerableAsync(tx).Result.Average(x => x.Value);
+                var enumerable = await scoreDictionary.CreateEnumerableAsync(tx);
+                using (var e = enumerable.GetAsyncEnumerator())
+                {
+                    while (await e.MoveNextAsync(this.cancellationToken).ConfigureAwait(false))
+                    {
+                        scoreList.Add(e.Current);
+                    }
+                }
+
+                tweetScore.TweetSentimentAverageScore = tweetScore.TweetCount == 0 ? 0 : scoreList.Average(x => x.Value);
             }
 
             return tweetScore;
@@ -82,16 +100,9 @@
 
         #endregion
 
-        #region Methods
-
         protected override IEnumerable<ServiceReplicaListener> CreateServiceReplicaListeners()
         {
-            return new List<ServiceReplicaListener>
-                       {
-                           new ServiceReplicaListener(
-                               initParams =>
-                               new ServiceRemotingListener<ITweet>(initParams, this))
-                       };
+            return new[] { new ServiceReplicaListener(this.CreateInternalListener) };
         }
 
         protected override async Task RunAsync(CancellationToken token)
@@ -118,9 +129,23 @@
                         scoreDictionary.AddOrUpdateAsync(tx, message.Value, score, (key, value) => score);
                     }
 
-                    tx.CommitAsync();
+                    tx.CommitAsync().Wait();
                 }
+
+                Thread.Sleep(TimeSpan.FromSeconds(1));
             }
+        }
+
+        private ICommunicationListener CreateInternalListener(ServiceContext context)
+        {
+            var internalEndpoint = context.CodePackageActivationContext.GetEndpoint("ProcessingServiceEndpoint");
+            var uriPrefix =
+                $"{internalEndpoint.Protocol}://+:{internalEndpoint.Port}/{context.PartitionId}/{context.ReplicaOrInstanceId}-{Guid.NewGuid()}/";
+
+            var nodeIP = FabricRuntime.GetNodeContext().IPAddressOrFQDN;
+
+            var uriPublished = uriPrefix.Replace("+", nodeIP);
+            return new HttpCommunicationListener(uriPrefix, uriPublished, this.ProcessInternalRequest);
         }
 
         private void CreateTweetMessages()
@@ -145,15 +170,13 @@
                 }
 
                 Thread.Sleep(TimeSpan.FromSeconds(10));
-            }
+           }
         }
 
         private decimal GetTweetSentiment(string message)
         {
             decimal score;
-            var configurationPackage =
-                this.ServiceInitializationParameters.CodePackageActivationContext.GetConfigurationPackageObject(
-                    "Config");
+            var configurationPackage = this.context.CodePackageActivationContext.GetConfigurationPackageObject("Config");
             var amlaAccountKey =
                 configurationPackage.Settings.Sections["UserSettings"].Parameters["AmlaAccountKey"].Value;
             var ServiceBaseUri = "https://api.datamarket.azure.com/";
@@ -187,9 +210,7 @@
 
         private IEnumerable<string> GetTweetsForSubject(string topic)
         {
-            var configurationPackage =
-                this.ServiceInitializationParameters.CodePackageActivationContext.GetConfigurationPackageObject(
-                    "Config");
+            var configurationPackage = this.context.CodePackageActivationContext.GetConfigurationPackageObject("Config");
             var accessToken = configurationPackage.Settings.Sections["UserSettings"].Parameters["AccessToken"].Value;
             var accessTokenSecret =
                 configurationPackage.Settings.Sections["UserSettings"].Parameters["AccessTokenSecret"].Value;
@@ -198,27 +219,22 @@
                 configurationPackage.Settings.Sections["UserSettings"].Parameters["ConsumerSecret"].Value;
 
             var authorizer = new SingleUserAuthorizer
-            {
-                CredentialStore =
-                                         new SingleUserInMemoryCredentialStore
-                                         {
-                                             ConsumerKey =
-                                                     consumerKey,
-                                             ConsumerSecret =
-                                                     consumerSecret,
-                                             AccessToken =
-                                                     accessToken,
-                                             AccessTokenSecret
-                                                     =
-                                                     accessTokenSecret
-                                         }
-            };
+                {
+                    CredentialStore =
+                        new SingleUserInMemoryCredentialStore
+                            {
+                                ConsumerKey = consumerKey,
+                                ConsumerSecret = consumerSecret,
+                                AccessToken = accessToken,
+                                AccessTokenSecret = accessTokenSecret
+                            }
+                };
             var twitterContext = new TwitterContext(authorizer);
             var searchResults = Enumerable.SingleOrDefault(
-                (from search in twitterContext.Search
-                 where search.Type == SearchType.Search && search.Query == topic && search.Count == 100
-                 select search));
-            if (searchResults != null && searchResults.Statuses.Count > 0)
+                from search in twitterContext.Search
+                where (search.Type == SearchType.Search) && (search.Query == topic) && (search.Count == 100)
+                select search);
+            if ((searchResults != null) && (searchResults.Statuses.Count > 0))
             {
                 return searchResults.Statuses.Select(status => status.Text);
             }
@@ -226,6 +242,36 @@
             return Enumerable.Empty<string>();
         }
 
-        #endregion
+        private async Task ProcessInternalRequest(HttpListenerContext context, CancellationToken cancelRequest)
+        {
+            string output = string.Empty;
+            try
+            {
+                var operation = context.Request.QueryString["operation"];
+                if (operation == "queue")
+                {
+                    var subject = context.Request.QueryString["subject"];
+                    await this.SetTweetSubject(subject);
+                    output = $"Added {subject} to Queue";
+                }
+                else
+                {
+                    if (operation == "get")
+                    {
+                        output = JsonConvert.SerializeObject(await this.GetAverageSentimentScore());
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                output = ex.Message;
+            }
+
+            using (var response = context.Response)
+            {
+                var outBytes = Encoding.UTF8.GetBytes(output);
+                response.OutputStream.Write(outBytes, 0, outBytes.Length);
+            }
+        }
     }
 }

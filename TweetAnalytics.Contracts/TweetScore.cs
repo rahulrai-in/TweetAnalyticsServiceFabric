@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace TweetAnalytics.Contracts
 {
-   public class TweetScore
+    public class TweetScore
     {
         public long TweetCount { get; set; }
         public decimal TweetSentimentAverageScore { get; set; }
