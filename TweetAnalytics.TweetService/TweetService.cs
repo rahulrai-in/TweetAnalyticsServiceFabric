@@ -1,4 +1,6 @@
-﻿namespace TweetAnalytics.TweetService
+﻿using Newtonsoft.Json.Linq;
+
+namespace TweetAnalytics.TweetService
 {
     using System;
     using System.Collections.Generic;
@@ -176,33 +178,44 @@
         private decimal GetTweetSentiment(string message)
         {
             decimal score;
-            var configurationPackage = this.context.CodePackageActivationContext.GetConfigurationPackageObject("Config");
+
+            var configurationPackage = context.CodePackageActivationContext.GetConfigurationPackageObject("Config");
+
             var amlaAccountKey =
                 configurationPackage.Settings.Sections["UserSettings"].Parameters["AmlaAccountKey"].Value;
-            var ServiceBaseUri = "https://api.datamarket.azure.com/";
+
             var accountKey = amlaAccountKey;
+
             using (var httpClient = new HttpClient())
             {
                 var inputTextEncoded = Uri.EscapeUriString(message);
-                httpClient.BaseAddress = new Uri(ServiceBaseUri);
-                var creds = "AccountKey:" + accountKey;
-                var authorizationHeader = "Basic " + Convert.ToBase64String(Encoding.ASCII.GetBytes(creds));
 
-                httpClient.DefaultRequestHeaders.Add("Authorization", authorizationHeader);
-                httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-                var sentimentRequest = "data.ashx/amla/text-analytics/v1/GetSentiment?Text=" + inputTextEncoded;
-                var responseTask = httpClient.GetAsync(sentimentRequest);
-                responseTask.Wait();
-                var response = responseTask.Result;
+                httpClient.DefaultRequestHeaders.Add("Ocp-Apim-Subscription-Key", accountKey);
+
+                var uri = "https://westus.api.cognitive.microsoft.com/text/analytics/v2.0/sentiment";
+                var byteData = Encoding.UTF8.GetBytes("{\"documents\": [{\"language\": \"en\",\"id\": \"1\",\"text\": \"" + inputTextEncoded + "\"}]}");
+
+                HttpResponseMessage response;
+                using (var content = new ByteArrayContent(byteData))
+                {
+                    content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+
+                    var responseTask = httpClient.PostAsync(uri, content);
+                    responseTask.Wait();
+
+                    response = responseTask.Result;
+                }
+
                 var contentTask = response.Content.ReadAsStringAsync();
-                var content = contentTask.Result;
+                var contentesult = contentTask.Result;
+
                 if (!response.IsSuccessStatusCode)
                 {
                     return -1;
                 }
 
-                dynamic sentimentResult = JsonConvert.DeserializeObject<dynamic>(content);
-                score = (decimal)sentimentResult.Score;
+                dynamic sentimentResult = JObject.Parse(contentesult);
+                score = (decimal)sentimentResult.documents[0].score;
             }
 
             return score;
